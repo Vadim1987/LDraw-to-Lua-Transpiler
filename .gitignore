@@ -1,0 +1,12 @@
+# LDraw library files are not part of the source tree.
+# They are downloaded from https://library.ldraw.org/library/updates/complete.zip
+
+*.dat
+*.ldr
+*.mpd
+
+# Transpiler output lives next to the project's main.lua but is
+# regenerated on every build, so it is not committed.
+
+compy/*/dat_*.lua
+.DS_Store
