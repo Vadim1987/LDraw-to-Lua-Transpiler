@@ -264,11 +264,32 @@ function Mat:row(i)
   return 0, 0, 0
 end
 
--- matrix multiplication
-function Mat:mul(m)
+-- matrix folding
+local function fold(self, f)
   local r = Mat:new()
   for i, v in ipairs(self) do
-    r[i] = v:tr(m)
+    r[i] = f(v)
   end
   return r
+end
+
+-- matrix multiplication
+function Mat:mul(m)
+  return fold(self, function(v)
+    return v:tr(m)
+  end
+end
+
+-- 3d orthogonal transformation
+function Mat:orthogonal3(i)
+  return fold(self, function(v)
+    return v:orthogonal3(i)
+  end
+end
+
+-- 3d orthogonal inverse transformation
+function Mat:orthogonal3i(i)
+  return fold(self, function(v)
+    return v:orthogonal3i(i)
+  end
 end
