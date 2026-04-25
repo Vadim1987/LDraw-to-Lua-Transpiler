@@ -113,6 +113,93 @@ function Vec:renorm()
   end
 end
 
+-- transformations
+
+-- permutation, returns true for odd permutations
+local function permute(t, o, n, i)
+  local p = o + (i % n)
+  local s = o < p
+  t[o], t[p] = t[p], t[o]
+  if n < 3 then
+    return s
+  elseif permute(t, o + 1, n - 1, math.floor(i / n)) then
+    return not s
+  end
+  return s
+end
+
+-- permute the first n elements, 0 <= i < n!
+function Vec:perm(n, i)
+  return permute(self, 1, n, i)
+end
+
+-- negate coordinate
+local function neg(x)
+  return x and -x
+end
+
+-- generated orthogonal transformations
+local function tr(n, i)
+  local t = { }
+  for j = 1, n do
+    local v = "v[" .. j .. "]"
+    if i % 2 == 1 then
+      v = "neg(" .. v .. ")"
+    end
+    t[j] = v
+    i = math.floor(i / 2)
+  end
+  permute(t, 1, n, i)
+  return t
+end
+
+local function orthogonal(n, i)
+  local t = tr(n, i)
+  local r = "return function(neg, v) return Vec:new {"
+  for j = 1, n do
+    r = r .. t[j] .. ","
+  end
+  r = r .. "} end"
+  local f = assert(loadstring(r))()
+  return function(v)
+    return f(neg, v)
+  end
+end
+
+local orthogonal3 = { }
+for i = 1, 47 do
+  orthogonal3[i] = orthogonal(3, i)
+end
+
+-- 3d orthogonal transformation number i (between 1 and 47)
+function Vec:orthogonal3(i)
+  return orthogonal3[i](self)
+end
+
+-- find matching inverse transformations
+local orthogonal3i = { }
+
+local v123 = Vec:new({
+  1,
+  2,
+  3
+})
+
+for i = 1, 47 do
+  local v = v123:orthogonal3(i)
+  for j = 1, 47 do
+    local w = v:orthogonal3(j)
+    if w[1] == 1 and w[2] == 2 and w[3] == 3 then
+      orthogonal3i[i] = j
+    end
+  end
+end
+
+-- 3d orthogonal inverse transofrmation number i
+function Vec:orthogonal3i(i)
+  return orthogonal3[orthogonal3i[i]](self)
+end
+
 -- transform by matrix
 function Vec:tr(m)
   local t = Vec:new()
@@ -177,11 +264,32 @@ function Mat:row(i)
   return 0, 0, 0
 end
 
--- matrix multiplication
-function Mat:mul(m)
+-- matrix folding
+local function fold(self, f)
   local r = Mat:new()
   for i, v in ipairs(self) do
-    r[i] = v:tr(m)
+    r[i] = f(v)
   end
   return r
+end
+
+-- matrix multiplication
+function Mat:mul(m)
+  return fold(self, function(v)
+    return v:tr(m)
+  end)
+end
+
+-- 3d orthogonal transformation
+function Mat:orthogonal3(i)
+  return fold(self, function(v)
+    return v:orthogonal3(i)
+  end)
+end
+
+-- 3d orthogonal inverse transformation
+function Mat:orthogonal3i(i)
+  return fold(self, function(v)
+    return v:orthogonal3i(i)
+  end)
 end
