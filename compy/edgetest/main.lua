@@ -121,8 +121,7 @@ end
 
 function apply_orthogonal(sub, x, y, z, i)
   with_frame(function(oldM, oldT)
-    local o = Mat.unit(3):orthogonal3(i)
-    M = o:mul(oldM)
+    M = oldM:orthogonal3(i)
     T = step_translation(oldM, oldT, x, y, z)
   end, sub)
 end
@@ -301,4 +300,3 @@ for i = 1, #PROJECTIONS do
   project = PROJECTIONS[i]
   ldr_pyramid()
 end
-
