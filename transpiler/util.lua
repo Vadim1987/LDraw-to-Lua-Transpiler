@@ -30,8 +30,9 @@ function tokenize(line)
   return t
 end
 
--- Strip prefix ending with "\" from an LDraw file reference and
--- rewrite "name.ext" as "ext_name".
+-- Strip prefix ending with "\" from an LDraw file reference,
+-- rewrite "name.ext" as "ext_name", and replace dashes with
+-- underscores so that the result is a valid Lua identifier.
 
 function mangle_ref(name)
   local bs = name:find("\\[^\\]*$")
@@ -39,6 +40,7 @@ function mangle_ref(name)
     name = name:sub(bs + 1)
   end
   local base, ext = name:match("^(.+)%.([^.]+)$")
+  base = base:gsub("-", "_")
   return ext:lower() .. "_" .. base
 end
 
