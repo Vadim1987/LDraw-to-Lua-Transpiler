@@ -23,6 +23,42 @@ function make_text_emitter(name)
   end
 end
 
+-- Emit !LDRAW_ORG: the first word becomes the argument, the
+-- rest of the line is appended as a comment on the same line.
+-- "Part UPDATE 2020-03" -> LDRAW_ORG("Part") -- UPDATE 2020-03
+
+function emit_ldraw_org(rest)
+  local first, tail = rest:match("^(%S+)%s*(.*)$")
+  local call = string.format("LDRAW_ORG(%q)", first)
+  if tail == "" then
+    table.insert(out, call)
+  else
+    table.insert(out, call .. " -- " .. tail)
+  end
+end
+
+-- Emit !PREVIEW: 13 numeric arguments (q tx ty tz plus a 3x3
+-- matrix). The arguments are space-separated on the rest of
+-- the line.
+
+function emit_preview(rest)
+  local tokens = tokenize(rest)
+  local nums = { }
+  for i = 1, #tokens do
+    table.insert(nums, fmt_num(tonumber(tokens[i])))
+  end
+  emit_call("PREVIEW", nums)
+end
+
+-- Emit !KEYWORDS: each whitespace-separated word becomes a
+-- separate KEYWORD call on its own line.
+
+function emit_keywords(rest)
+  for word in rest:gmatch("%S+") do
+    emit_call("KEYWORD", { string.format("%q", word) })
+  end
+end
+
 -- Type 0 patterns as two parallel tables. Adding another meta
 -- pattern is one line in each table.
 
@@ -32,7 +68,11 @@ META_PATTERN = {
   "^PAUSE%s*$",
   "^SAVE%s*$",
   "^WRITE%s+(.*)$",
-  "^PRINT%s+(.*)$"
+  "^PRINT%s+(.*)$",
+  "^!CATEGORY%s+(.*)$",
+  "^!LDRAW_ORG%s+(.*)$",
+  "^!PREVIEW%s+(.*)$",
+  "^!KEYWORDS%s+(.*)$"
 }
 
 META_HANDLER = {
@@ -41,7 +81,11 @@ META_HANDLER = {
   make_nullary_emitter("PAUSE"),
   make_nullary_emitter("SAVE"),
   make_text_emitter("WRITE"),
-  make_text_emitter("PRINT")
+  make_text_emitter("PRINT"),
+  make_text_emitter("CATEGORY"),
+  emit_ldraw_org,
+  emit_preview,
+  emit_keywords
 }
 
 -- Dispatch a Type 0 line: match its text against each pattern
@@ -74,44 +118,51 @@ function matches_matrix(m, pattern)
   return true
 end
 
--- Factory that packs nine matrix entries into a 9-element
--- pattern table without an expanded table literal.
+-- Search the orthogonal_base table for a matrix matching m.
+-- Returns the matching index 1..47 or nil if no match. The
+-- table comes from orthogonal_bases.lua which is required by
+-- the entry point before this module is loaded.
 
-function make_pattern(a, b, c, d, e, f, g, h, i)
-  local p = { }
-  p[1], p[2], p[3] = a, b, c
-  p[4], p[5], p[6] = d, e, f
-  p[7], p[8], p[9] = g, h, i
-  return p
-end
-
--- Fixed rotation patterns for compass-direction placement, as
--- three parallel tables.
-
-PLACE_PATTERN = {
-  make_pattern(1, 0, 0, 0, 1, 0, 0, 0, 1),
-  make_pattern(0, 0, 1, 0, 1, 0, -1, 0, 0),
-  make_pattern(-1, 0, 0, 0, 1, 0, 0, 0, -1),
-  make_pattern(0, 0, -1, 0, 1, 0, 1, 0, 0)
-}
-
-PLACE_NAME = {
-  "placeN",
-  "placeE",
-  "placeS",
-  "placeW"
-}
-
--- Check whether m matches a placeN/E/S/W pattern; return the
--- matching DSL name or nil if no match.
-
-function match_place(m)
-  for i = 1, #PLACE_PATTERN do
-    if matches_matrix(m, PLACE_PATTERN[i]) then
-      return PLACE_NAME[i]
+function match_orthogonal(m)
+  for i = 1, #orthogonal_base do
+    if matches_matrix(m, orthogonal_base[i]) then
+      return i
     end
   end
   return nil
+end
+
+-- Map from orthogonal_base index to the name of a dedicated
+-- DSL function. Indices not in this table fall through to the
+-- generic place(... i) form.
+
+NAMED_INDEX = {
+  [1] = "mirrorEW",
+  [2] = "mirrorUD",
+  [4] = "mirrorNS",
+  [5] = "placeS",
+  [17] = "placeW",
+  [20] = "placeE"
+}
+
+-- The identity matrix is not present in orthogonal_base; check
+-- it directly. Used to dispatch to placeN.
+
+function is_identity(m)
+  return approx_eq(m[1], 1) and approx_eq(m[2], 0)
+    and approx_eq(m[3], 0) and approx_eq(m[4], 0)
+    and approx_eq(m[5], 1) and approx_eq(m[6], 0)
+    and approx_eq(m[7], 0) and approx_eq(m[8], 0)
+    and approx_eq(m[9], 1)
+end
+
+-- A diagonal matrix has zero off-diagonal entries and arbitrary
+-- diagonal scalars (a, e, i). Maps to stretch(... a, e, i).
+
+function is_stretch(m)
+  return approx_eq(m[2], 0) and approx_eq(m[3], 0)
+    and approx_eq(m[4], 0) and approx_eq(m[6], 0)
+    and approx_eq(m[7], 0) and approx_eq(m[8], 0)
 end
 
 -- The twist shape is [a, 0, c; 0, 1, 0; -c, 0, a]. It has two
@@ -150,6 +201,32 @@ function build_type1_head(fname, q, x, y, z)
   return head
 end
 
+-- Try to dispatch the matrix to a named or generic orthogonal
+-- DSL function. Returns true on success, false if the matrix
+-- is not one of the 47 orthogonal bases.
+
+function emit_orthogonal(m, args)
+  local i = match_orthogonal(m)
+  if not i then
+    return false
+  end
+  local named = NAMED_INDEX[i]
+  if named then
+    emit_call(named, args)
+  else
+    insert_nums(args, i)
+    emit_call("place", args)
+  end
+  return true
+end
+
+-- Emit stretch(... a, e, i) for a diagonal matrix.
+
+function emit_stretch(m, args)
+  insert_nums(args, m[1], m[5], m[9])
+  emit_call("stretch", args)
+end
+
 -- Emit a twist call if the matrix has the twist shape, or a
 -- ref call with all nine matrix coefficients otherwise.
 
@@ -163,16 +240,32 @@ function emit_twist_or_ref(m, args)
   emit_call("ref", args)
 end
 
--- Emit a Type 1 line: dispatch to placeN/E/S/W if the matrix
--- matches a compass pattern, otherwise hand off to the
--- twist-or-ref tail.
+-- Try the early dispatch paths: identity, named or generic
+-- orthogonal, and stretch. Returns true on success.
+
+function try_named_dispatch(m, args)
+  if is_identity(m) then
+    emit_call("placeN", args)
+    return true
+  end
+  if emit_orthogonal(m, args) then
+    return true
+  end
+  if is_stretch(m) then
+    emit_stretch(m, args)
+    return true
+  end
+  return false
+end
+
+-- Emit a Type 1 line: dispatch in order of specificity from
+-- identity, through named and generic orthogonal, diagonal
+-- stretch, twist, and the general ref form.
 
 function handle_type1(tokens)
   local q, x, y, z, m, fname = parse_type1(tokens)
   local args = build_type1_head(fname, q, x, y, z)
-  local place = match_place(m)
-  if place then
-    emit_call(place, args)
+  if try_named_dispatch(m, args) then
     return
   end
   emit_twist_or_ref(m, args)
@@ -254,3 +347,6 @@ function process_line(line)
     dispatch_line(trimmed)
   end
 end
+
+
+ 
