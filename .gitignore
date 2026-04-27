@@ -9,4 +9,5 @@
 # regenerated on every build, so it is not committed.
 
 compy/*/dat_*.lua
+compy/*/ldr_*.lua
 .DS_Store
