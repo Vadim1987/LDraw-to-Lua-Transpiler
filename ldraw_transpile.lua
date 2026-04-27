@@ -20,9 +20,12 @@ EDGE_COLOUR = 24
 
 -- Load the transpiler modules. Each module defines its helpers
 -- as globals and does not return a namespace.
+-- orthogonal_bases comes before transpiler.types because the
+-- latter uses orthogonal_base when initialising its tables.
 
 require "transpiler.util"
 require "transpiler.emit"
+require "orthogonal_bases"
 require "transpiler.types"
 
 -- Main: read the input file, normalise line endings, process
