@@ -1,7 +1,8 @@
 -- vector and matrix operations
 -- nil elements in vectors are treated as zero
 -- nil elements in matrices are treated as zero vectors
--- vector coordinates are positive integers; no other keys are allowed
+-- vector coordinates are positive integers
+-- no other keys are allowed
 
 -- Recommended pattern:
 -- Use classes inside calculations, but do not expose in APIs.

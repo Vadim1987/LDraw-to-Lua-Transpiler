@@ -1,5 +1,5 @@
 # LDraw library files are not part of the source tree.
-# They are downloaded from https://library.ldraw.org/library/updates/complete.zip
+# They are downloaded from the LDraw complete library zip.
 
 *.dat
 *.ldr

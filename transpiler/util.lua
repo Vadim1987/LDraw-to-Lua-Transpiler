@@ -30,17 +30,16 @@ function tokenize(line)
   return t
 end
 
--- Strip prefix ending with "\" from an LDraw file reference,
--- rewrite "name.ext" as "ext_name", and replace dashes with
--- underscores so that the result is a valid Lua identifier.
+-- Rewrite an LDraw reference into a Lua identifier.
+-- Subpart prefix "s/" is omitted; resolution paths are kept.
 
 function mangle_ref(name)
-  local bs = name:find("\\[^\\]*$")
-  if bs then
-    name = name:sub(bs + 1)
-  end
+  name = name:gsub("\\", "/")
+  name = name:gsub("^parts/", "")
+  name = name:gsub("^p/", "")
+  name = name:gsub("^s/", "")
   local base, ext = name:match("^(.+)%.([^.]+)$")
-  base = base:gsub("-", "_")
+  base = base:gsub("[^%w_]", "_")
   return ext:lower() .. "_" .. base
 end
 
@@ -129,9 +128,39 @@ function read_file(path)
   return s
 end
 
-function write_file(path)
-  local f = open_or_die(path, "w")
-  f:write(table.concat(out, "\n"))
+function write_lines(path, lines, mode)
+  local f = open_or_die(path, mode or "w")
+  f:write(table.concat(lines, "\n"))
   f:write("\n")
   f:close()
+end
+
+function write_file(path)
+  write_lines(path, out, "w")
+end
+
+function write_binary(path, data)
+  local f = open_or_die(path, "wb")
+  f:write(data)
+  f:close()
+end
+
+function dir_name(path)
+  return path:match("^(.*)/[^/]*$") or "."
+end
+
+function join_path(dir, name)
+  if dir == "." then
+    return name
+  end
+  return dir .. "/" .. name
+end
+
+function lua_output_path(out_path, name)
+  local file = mangle_ref(name) .. ".lua"
+  return join_path(dir_name(out_path), file)
+end
+
+function data_output_path(out_path, name)
+  return join_path(dir_name(out_path), name:gsub("\\", "/"))
 end

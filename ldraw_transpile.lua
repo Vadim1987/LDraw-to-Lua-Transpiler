@@ -1,6 +1,6 @@
 -- LDraw to Lua transpiler.
--- Converts one LDraw file (.ldr/.dat/.mpd) into a Lua chunk of
--- top-level DSL calls for the Compy edgetest runtime.
+-- Converts LDraw files and MPD packages into Lua chunks for
+-- the Compy edgetest runtime.
 
 -- Matrix comparison tolerance per the LDraw spec.
 
@@ -25,19 +25,48 @@ EDGE_COLOUR = 24
 
 require "transpiler.util"
 require "transpiler.emit"
+require "transpiler.colors"
+color_id = { }
+require "transpiler.ldraw_color_id"
 require "orthogonal_bases"
 require "transpiler.types"
+require "transpiler.base64"
+require "transpiler.mpd"
 
 -- Main: read the input file, normalise line endings, process
 -- each line, and write the result.
 
-function main(in_path, out_path)
-  local src = read_file(in_path)
-  src = src:gsub("\13\n", "\n"):gsub("\13", "\n")
+function normalise_source(src)
+  return src:gsub("\13\n", "\n"):gsub("\13", "\n")
+end
+
+function source_lines(src)
+  local lines = { }
   for line in (src .. "\n"):gmatch("([^\n]*)\n") do
-    process_line(line)
+    table.insert(lines, line)
   end
-  write_file(out_path)
+  return lines
+end
+
+function transpile_lines(lines)
+  out = { }
+  for i = 1, #lines do
+    process_line(lines[i])
+  end
+  return out
+end
+
+function transpile_source(src)
+  return transpile_lines(source_lines(src))
+end
+
+function main(in_path, out_path)
+  local src = normalise_source(read_file(in_path))
+  if has_mpd_meta(src) then
+    process_mpd(src, out_path)
+  else
+    write_lines(out_path, transpile_source(src), "w")
+  end
 end
 
 if arg and arg[1] and arg[2] then

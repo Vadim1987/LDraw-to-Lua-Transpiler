@@ -43,11 +43,11 @@ end
 
 function emit_preview(rest)
   local tokens = tokenize(rest)
-  local nums = { }
-  for i = 1, #tokens do
-    table.insert(nums, fmt_num(tonumber(tokens[i])))
+  local args = { color_ref(tokens[1]) }
+  for i = 2, #tokens do
+    table.insert(args, fmt_num(tonumber(tokens[i])))
   end
-  emit_call("PREVIEW", nums)
+  emit_call("PREVIEW", args)
 end
 
 -- Emit !KEYWORDS: each whitespace-separated word becomes a
@@ -72,7 +72,8 @@ META_PATTERN = {
   "^!CATEGORY%s+(.*)$",
   "^!LDRAW_ORG%s+(.*)$",
   "^!PREVIEW%s+(.*)$",
-  "^!KEYWORDS%s+(.*)$"
+  "^!KEYWORDS%s+(.*)$",
+  "^!COLOUR%s+(.*)$"
 }
 
 META_HANDLER = {
@@ -85,7 +86,8 @@ META_HANDLER = {
   make_text_emitter("CATEGORY"),
   emit_ldraw_org,
   emit_preview,
-  emit_keywords
+  emit_keywords,
+  emit_colour
 }
 
 -- Dispatch a Type 0 line: match its text against each pattern
@@ -118,14 +120,25 @@ function matches_matrix(m, pattern)
   return true
 end
 
+-- Convert LDraw row-major entries to linalg column order.
+
+function ldraw_to_linalg(m)
+  return {
+    m[1], m[4], m[7],
+    m[2], m[5], m[8],
+    m[3], m[6], m[9]
+  }
+end
+
 -- Search the orthogonal_base table for a matrix matching m.
 -- Returns the matching index 1..47 or nil if no match. The
 -- table comes from orthogonal_bases.lua which is required by
 -- the entry point before this module is loaded.
 
 function match_orthogonal(m)
+  local cm = ldraw_to_linalg(m)
   for i = 1, #orthogonal_base do
-    if matches_matrix(m, orthogonal_base[i]) then
+    if matches_matrix(cm, orthogonal_base[i]) then
       return i
     end
   end
@@ -176,11 +189,22 @@ function is_twist(m)
     and approx_eq(m[1], m[9]) and approx_eq(m[3], -m[7])
 end
 
--- Parse a Type 1 line. Tokens: "1", colour, tx, ty, tz, nine
+-- Return the rest of a line after count whitespace tokens.
+
+function line_tail(line, count)
+  local tail = line
+  for i = 1, count do
+    tail = tail:match("^%S+%s*(.*)$")
+  end
+  return tail
+end
+
+-- Parse a Type 1 line. Fields: "1", colour, tx, ty, tz, nine
 -- matrix entries, filename.
 
-function parse_type1(tokens)
-  local q = tonumber(tokens[2])
+function parse_type1_line(line)
+  local tokens = tokenize(line)
+  local q = color_ref(tokens[2])
   local x = tonumber(tokens[3])
   local y = tonumber(tokens[4])
   local z = tonumber(tokens[5])
@@ -188,7 +212,7 @@ function parse_type1(tokens)
   for i = 1, 9 do
     m[i] = tonumber(tokens[5 + i])
   end
-  return q, x, y, z, m, tokens[15]
+  return q, x, y, z, m, line_tail(line, 14)
 end
 
 -- Build the head of the argument list common to every Type 1
@@ -197,7 +221,8 @@ end
 function build_type1_head(fname, q, x, y, z)
   local head = { }
   table.insert(head, mangle_ref(fname))
-  insert_nums(head, q, x, y, z)
+  table.insert(head, q)
+  insert_nums(head, x, y, z)
   return head
 end
 
@@ -262,8 +287,8 @@ end
 -- identity, through named and generic orthogonal, diagonal
 -- stretch, twist, and the general ref form.
 
-function handle_type1(tokens)
-  local q, x, y, z, m, fname = parse_type1(tokens)
+function handle_type1_line(line)
+  local q, x, y, z, m, fname = parse_type1_line(line)
   local args = build_type1_head(fname, q, x, y, z)
   if try_named_dispatch(m, args) then
     return
@@ -282,7 +307,7 @@ function emit_colour_variant(tokens, last, name_24, name_q)
   if q == EDGE_COLOUR then
     emit_call(name_24, coords)
   else
-    table.insert(coords, 1, fmt_num(q))
+    table.insert(coords, 1, color_ref(q))
     emit_call(name_q, coords)
   end
 end
@@ -292,7 +317,9 @@ end
 
 function make_poly_handler(last, name)
   return function(tokens)
-    emit_call(name, nums_from_tokens(tokens, 2, last))
+    local args = nums_from_tokens(tokens, 3, last)
+    table.insert(args, 1, color_ref(tokens[2]))
+    emit_call(name, args)
   end
 end
 
@@ -305,7 +332,6 @@ function handle_type5(tokens)
 end
 
 TYPE_HANDLER = {
-  ["1"] = handle_type1,
   ["2"] = handle_type2,
   ["3"] = make_poly_handler(11, "tri"),
   ["4"] = make_poly_handler(14, "quad"),
@@ -327,8 +353,10 @@ end
 function dispatch_line(trimmed)
   local first = trimmed:match("^(%S+)")
   if first == "0" then
-    process_zero(trimmed)
-    return
+    return process_zero(trimmed)
+  end
+  if first == "1" then
+    return handle_type1_line(trimmed)
   end
   local handler = TYPE_HANDLER[first]
   if handler then
@@ -347,6 +375,3 @@ function process_line(line)
     dispatch_line(trimmed)
   end
 end
-
-
- 
