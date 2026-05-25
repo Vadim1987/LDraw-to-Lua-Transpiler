@@ -49,7 +49,7 @@ local function source_lines(src)
 end
 
 function transpile_lines(lines)
-  out = { }
+  out = { "local MAIN_COLOR, M, T, W = ..." }
   for _, line in ipairs(lines) do
     process_line(line)
   end

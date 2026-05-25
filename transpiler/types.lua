@@ -59,16 +59,20 @@ local function emit_keywords(rest)
   end
 end
 
--- A factory that returns a handler emitting BFC_X(arg) call.
+-- A factory that returns a handler emitting W = BFC_X(W, arg).
 
 local function make_bfc_const(name, arg)
-  return function() emit_call(name, { tostring(arg) }) end
+  return function()
+    emit_call("W = " .. name, { "W", tostring(arg) })
+  end
 end
 
--- A factory that returns a handler emitting BFC_X() call.
+-- A factory that returns a handler emitting W = BFC_X(W).
 
 local function make_bfc_void(name)
-  return function() emit_call(name, { }) end
+  return function()
+    emit_call("W = " .. name, { "W" })
+  end
 end
 
 -- INVERTNEXT sets a transpiler flag; the next Type 1 wraps the
@@ -265,7 +269,7 @@ end
 -- emission: the sub-part reference, colour, and translation.
 
 local function build_type1_head(fname, q, x, y, z)
-  local head = { }
+  local head = { "M", "T", "W" }
   table.insert(head, mangle_ref(fname))
   table.insert(head, q)
   insert_nums(head, x, y, z)
@@ -278,7 +282,7 @@ end
 local function emit_type1_call(name, args)
   if INVERT_NEXT then
     INVERT_NEXT = false
-    name = "BFC_INVERT(" .. name .. ")"
+    args[3] = "BFC_INVERT(W)"
   end
   emit_call(name, args)
 end
@@ -360,20 +364,29 @@ local function emit_colour_variant(tokens, last, name_24, name_q)
   local q = tonumber(tokens[2])
   local coords = nums_from_tokens(tokens, 3, last)
   if q == EDGE_COLOUR then
+    table.insert(coords, 1, "T")
+    table.insert(coords, 1, "M")
     emit_call(name_24, coords)
   else
     table.insert(coords, 1, color_ref(q))
+    table.insert(coords, 1, "T")
+    table.insert(coords, 1, "M")
     emit_call(name_q, coords)
   end
 end
 
 -- Factory for Types 3 and 4, which take a colour plus a fixed
--- number of coordinates and emit a single call.
+-- number of coordinates and emit a single call. M, T, W are
+-- prefixed so the picking pass can transform points and apply
+-- BFC culling.
 
 local function make_poly_handler(last, name)
   return function(tokens)
     local args = nums_from_tokens(tokens, 3, last)
     table.insert(args, 1, color_ref(tokens[2]))
+    table.insert(args, 1, "W")
+    table.insert(args, 1, "T")
+    table.insert(args, 1, "M")
     emit_call(name, args)
   end
 end
