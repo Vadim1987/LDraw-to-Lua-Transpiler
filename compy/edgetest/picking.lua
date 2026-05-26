@@ -90,8 +90,22 @@ function point_in_convex(n, hx, hy, hz, nx, ny, nz)
   return true
 end
 
--- pick(root, ray) is the loaded pick.lua chunk. It returns
--- (hit, hit_l) after running root and accumulating closest
--- polygon intersection across all Part subtrees.
+-- True if the ray comes within radius of a sphere centred at
+-- (cx, cy, cz). Standard ray-sphere intersection by projection
+-- onto the ray and comparing perpendicular distance to radius.
+
+function sphere_test(ox, oy, oz, dx, dy, dz, cx, cy, cz, r)
+  local vx, vy, vz = cx - ox, cy - oy, cz - oz
+  local t = vx * dx + vy * dy + vz * dz
+  local px, py, pz = ox + dx * t, oy + dy * t, oz + dz * t
+  local ex, ey, ez = cx - px, cy - py, cz - pz
+  return ex * ex + ey * ey + ez * ez <= r * r
+end
+
+-- pick(root, ray, radii) is the loaded pick.lua chunk. radii
+-- is an optional table mapping a sub-chunk to the radius of a
+-- bounding sphere centred at the sub-chunk's local origin. If
+-- supplied, orthonormal placements skip subtrees whose sphere
+-- the ray misses; non-orthonormal placements ignore radii.
 
 pick = loadfile("pick.lua")
