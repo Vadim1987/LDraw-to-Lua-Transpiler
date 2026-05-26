@@ -16,6 +16,7 @@ local VIEW_M = Mat.unit(3)
 local VIEW_T = Vec.d3(0, 0, 0)
 local SELECTED
 local ROOT_COLOR = Yellow
+local PART_RADII
 
 local DAT_FILES = {
   "dat_3001",
@@ -43,40 +44,63 @@ local function load_chunk(name)
 end
 
 local function load_chunks()
-  for _, name in pairs(DAT_FILES) do
+  for _, name in ipairs(DAT_FILES) do
     load_chunk(name)
   end
   load_chunk("ldr_pyramid")
 end
 
--- Silenced env: every compy.ldraw function replaced with
--- ignore. Used for one-pass diagnostic chunk inspection.
+-- Detect pass callback table. Everything ignores except
+-- LDRAW_ORG; that one is set per chunk to mark Part membership.
 
-local function silenced_env()
-  local env = { }
-  for k, v in pairs(compy.ldraw) do
-    env[k] = (type(v) == "function") and ignore or v
-  end
-  return env
+local DETECT_CALLBACKS = { }
+DETECT_CALLBACKS.placeN = ignore
+DETECT_CALLBACKS.place = ignore
+DETECT_CALLBACKS.placeS = ignore
+DETECT_CALLBACKS.placeW = ignore
+DETECT_CALLBACKS.placeE = ignore
+DETECT_CALLBACKS.mirrorEW = ignore
+DETECT_CALLBACKS.mirrorUD = ignore
+DETECT_CALLBACKS.mirrorNS = ignore
+DETECT_CALLBACKS.stretch = ignore
+DETECT_CALLBACKS.twist = ignore
+DETECT_CALLBACKS.ref = ignore
+DETECT_CALLBACKS.edge = ignore
+DETECT_CALLBACKS.line = ignore
+DETECT_CALLBACKS.outline = ignore
+DETECT_CALLBACKS.color_outline = ignore
+DETECT_CALLBACKS.tri = ignore
+DETECT_CALLBACKS.quad = ignore
+DETECT_CALLBACKS.LDRAW_ORG = ignore
+DETECT_CALLBACKS.STEP = ignore
+DETECT_CALLBACKS.CLEAR = ignore
+DETECT_CALLBACKS.PAUSE = ignore
+DETECT_CALLBACKS.SAVE = ignore
+DETECT_CALLBACKS.WRITE = ignore
+DETECT_CALLBACKS.PRINT = ignore
+DETECT_CALLBACKS.CATEGORY = ignore
+DETECT_CALLBACKS.PREVIEW = ignore
+DETECT_CALLBACKS.KEYWORD = ignore
+
+for k, v in pairs(BFC_DEFAULTS) do
+  DETECT_CALLBACKS[k] = v
 end
 
 -- Run chunk once with all DSL silenced except LDRAW_ORG, which
 -- marks the chunk as a Part if its kind is "Part".
 
 local function detect_part(chunk)
-  local env = silenced_env()
-  function env.LDRAW_ORG(kind)
+  DETECT_CALLBACKS.LDRAW_ORG = function(kind)
     if kind == "Part" then
       compy.ldraw.parts[chunk] = true
     end
   end
-  setfenv(chunk, env)
+  setmetatable(compy.ldraw, { __index = DETECT_CALLBACKS })
   chunk(ROOT_COLOR, Mat.unit(3), Vec.d3(0, 0, 0), nil)
-  setfenv(chunk, compy.ldraw)
 end
 
 local function detect_parts()
-  for _, name in pairs(DAT_FILES) do
+  for _, name in ipairs(DAT_FILES) do
     detect_part(compy.ldraw[name])
   end
 end
@@ -88,6 +112,18 @@ local function setup_view()
     Vec.d3(0.4789, -0.3082, 0.8221)
   })
   VIEW_T = Vec.d3(0, 70, 850)
+end
+
+-- Bounding sphere radii in LDU for the parts used by the
+-- pyramid, measured from the part's local origin to its
+-- farthest vertex and rounded up. Picking uses these to skip
+-- subtrees the ray misses.
+
+local function setup_radii()
+  PART_RADII = {
+    [compy.ldraw.dat_3001] = 51,
+    [compy.ldraw.dat_3003] = 38
+  }
 end
 
 local function perspective(x, y, z)
@@ -142,15 +178,92 @@ local function draw_color_outline(M, T, q,
     x1, y1, z1, x2, y2, z2, x3, y3, z3, x4, y4, z4)
 end
 
--- Draw pass: install the rendering callbacks and run root.
+-- Draw placement callbacks. Each composes the child frame and
+-- recurses; no extra bookkeeping is needed for rendering.
+
+local function draw_placeN(M, T, W, sub, q, x, y, z)
+  if sub then
+    sub(q, M, compy.ldraw.step_t(M, T, x, y, z), W)
+  end
+end
+
+local function draw_place(M, T, W, sub, q, x, y, z, i)
+  if sub then
+    sub(q, M:orthogonal3(i),
+      compy.ldraw.step_t(M, T, x, y, z), W)
+  end
+end
+
+-- Build a draw placement closure that calls draw_place with a
+-- fixed orthogonal_base index. Used to materialise placeS/W/E
+-- and mirrorEW/UD/NS from INDEXED_PLACEMENTS.
+
+local function make_draw_indexed(i)
+  return function(M, T, W, sub, q, x, y, z)
+    draw_place(M, T, W, sub, q, x, y, z, i)
+  end
+end
+
+local function draw_stretch(M, T, W, sub, q, x, y, z, a, e, i)
+  if sub then
+    sub(q, Mat.diag(a, e, i):mul(M),
+      compy.ldraw.step_t(M, T, x, y, z), W)
+  end
+end
+
+local function draw_twist(M, T, W, sub, q, x, y, z, a, c)
+  if sub then
+    sub(q, compy.ldraw.twist_m(a, c):mul(M),
+      compy.ldraw.step_t(M, T, x, y, z), W)
+  end
+end
+
+local function draw_ref(M, T, W, sub, q, x, y, z,
+    a, b, c, d, e, f, g, h, i)
+  if sub then
+    sub(q, compy.ldraw.ref_m(a, b, c, d, e, f, g, h, i):mul(M),
+      compy.ldraw.step_t(M, T, x, y, z), W)
+  end
+end
+
+-- Draw callback table. All chunk hooks the draw pass uses are
+-- registered here; the table is installed before traversal.
+
+local DRAW_CALLBACKS = { }
+DRAW_CALLBACKS.placeN = draw_placeN
+DRAW_CALLBACKS.place = draw_place
+DRAW_CALLBACKS.stretch = draw_stretch
+DRAW_CALLBACKS.twist = draw_twist
+DRAW_CALLBACKS.ref = draw_ref
+DRAW_CALLBACKS.edge = draw_edge
+DRAW_CALLBACKS.line = draw_line
+DRAW_CALLBACKS.outline = draw_outline
+DRAW_CALLBACKS.color_outline = draw_color_outline
+DRAW_CALLBACKS.tri = ignore
+DRAW_CALLBACKS.quad = ignore
+DRAW_CALLBACKS.LDRAW_ORG = ignore
+DRAW_CALLBACKS.STEP = ignore
+DRAW_CALLBACKS.CLEAR = ignore
+DRAW_CALLBACKS.PAUSE = ignore
+DRAW_CALLBACKS.SAVE = ignore
+DRAW_CALLBACKS.WRITE = ignore
+DRAW_CALLBACKS.PRINT = ignore
+DRAW_CALLBACKS.CATEGORY = ignore
+DRAW_CALLBACKS.PREVIEW = ignore
+DRAW_CALLBACKS.KEYWORD = ignore
+
+for name, i in pairs(INDEXED_PLACEMENTS) do
+  DRAW_CALLBACKS[name] = make_draw_indexed(i)
+end
+
+for k, v in pairs(BFC_DEFAULTS) do
+  DRAW_CALLBACKS[k] = v
+end
+
+-- Draw pass: install draw callbacks and run root.
 
 function draw(root)
-  compy.ldraw.edge = draw_edge
-  compy.ldraw.line = draw_line
-  compy.ldraw.outline = draw_outline
-  compy.ldraw.color_outline = draw_color_outline
-  compy.ldraw.tri = ignore
-  compy.ldraw.quad = ignore
+  setmetatable(compy.ldraw, { __index = DRAW_CALLBACKS })
   root()
 end
 
@@ -200,7 +313,7 @@ end
 function love.mousepressed(mx, my)
   SELECTED = pick(function()
     run_model(ROOT_COLOR)
-  end, mouse_ray(mx, my))
+  end, mouse_ray(mx, my), PART_RADII)
 end
 
 function love.draw()
@@ -211,3 +324,4 @@ end
 load_chunks()
 detect_parts()
 setup_view()
+setup_radii()

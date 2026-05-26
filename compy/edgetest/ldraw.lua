@@ -1,14 +1,15 @@
--- LDraw tree traversal runtime.
-
--- Virtual LEGO namespace. ldraw chunks live here; this table
--- is also their environment. DSL callbacks live here with
--- regular _G env.
+-- LDraw tree traversal runtime. The compy.ldraw table is the
+-- shared environment of all transpiled chunks. Every callback
+-- the chunks invoke -- placement, BFC, meta, geometry -- is
+-- provided by the active pass via the table's __index. This
+-- file holds only what is shared across passes: the namespace,
+-- frame math, and a BFC default table that passes can copy.
 
 compy = { }
 compy.ldraw = { }
 
--- Parts membership. Populated after load via diagnostic
--- LDRAW_ORG-only pass over each chunk.
+-- Parts membership. Filled by detect_parts at startup; used
+-- by pick to mark a sub-chunk as a selectable Part.
 
 compy.ldraw.parts = { }
 
@@ -31,9 +32,8 @@ function loadtable(filename)
   return env
 end
 
--- Frame composition helpers. Both draw and pick passes use
--- these to compose child frames from parent (M, T) plus
--- per-call shape data.
+-- Frame composition helpers. Pure math, used by placement
+-- callbacks of every pass.
 
 -- Translate (x, y, z) by m, then accumulate t.
 
@@ -63,119 +63,50 @@ function compy.ldraw.ref_m(a, b, c, d, e, f, g, h, i)
   })
 end
 
--- Virtual LEGO DSL. Each placement function receives parent's
--- frame (M, T, W) and the subref data, then invokes sub with
--- the composed child frame.
+-- BFC defaults. Each callback takes W and returns the new W.
+-- W is +1 (CCW), -1 (CW), or nil (no BFC). Passes that need
+-- BFC support copy these entries into their callback table.
 
-function compy.ldraw.placeN(M, T, W, sub, q, x, y, z)
-  if sub then
-    sub(q, M, compy.ldraw.step_t(M, T, x, y, z), W)
-  end
-end
+BFC_DEFAULTS = { }
 
-function compy.ldraw.place(M, T, W, sub, q, x, y, z, i)
-  if sub then
-    sub(q, M:orthogonal3(i),
-      compy.ldraw.step_t(M, T, x, y, z), W)
-  end
-end
-
-function compy.ldraw.placeS(M, T, W, sub, q, x, y, z)
-  compy.ldraw.place(M, T, W, sub, q, x, y, z, 5)
-end
-
-function compy.ldraw.placeW(M, T, W, sub, q, x, y, z)
-  compy.ldraw.place(M, T, W, sub, q, x, y, z, 17)
-end
-
-function compy.ldraw.placeE(M, T, W, sub, q, x, y, z)
-  compy.ldraw.place(M, T, W, sub, q, x, y, z, 20)
-end
-
-function compy.ldraw.mirrorEW(M, T, W, sub, q, x, y, z)
-  compy.ldraw.place(M, T, W, sub, q, x, y, z, 1)
-end
-
-function compy.ldraw.mirrorUD(M, T, W, sub, q, x, y, z)
-  compy.ldraw.place(M, T, W, sub, q, x, y, z, 2)
-end
-
-function compy.ldraw.mirrorNS(M, T, W, sub, q, x, y, z)
-  compy.ldraw.place(M, T, W, sub, q, x, y, z, 4)
-end
-
-function compy.ldraw.stretch(M, T, W, sub, q, x, y, z, a, e, i)
-  if sub then
-    sub(q, Mat.diag(a, e, i):mul(M),
-      compy.ldraw.step_t(M, T, x, y, z), W)
-  end
-end
-
-function compy.ldraw.twist(M, T, W, sub, q, x, y, z, a, c)
-  if sub then
-    sub(q, compy.ldraw.twist_m(a, c):mul(M),
-      compy.ldraw.step_t(M, T, x, y, z), W)
-  end
-end
-
-function compy.ldraw.ref(M, T, W, sub, q, x, y, z,
-    a, b, c, d, e, f, g, h, i)
-  if sub then
-    sub(q, compy.ldraw.ref_m(a, b, c, d, e, f, g, h, i):mul(M),
-      compy.ldraw.step_t(M, T, x, y, z), W)
-  end
-end
-
--- Default BFC implementation. Each callback takes W and
--- returns the new W. W is +1 (CCW), -1 (CW), or nil (no BFC).
-
-function compy.ldraw.BFC_CERTIFY(W, sign)
+function BFC_DEFAULTS.BFC_CERTIFY(W, sign)
   return sign
 end
 
-function compy.ldraw.BFC_NOCERTIFY(W)
+function BFC_DEFAULTS.BFC_NOCERTIFY(W)
   return nil
 end
 
-function compy.ldraw.BFC(W, sign)
+function BFC_DEFAULTS.BFC(W, sign)
   if W then
     return sign
   end
 end
 
-function compy.ldraw.BFC_INVERT(W)
+function BFC_DEFAULTS.BFC_INVERT(W)
   if W then
     return -W
   end
 end
 
-function compy.ldraw.BFC_CLIP(W, sign)
+function BFC_DEFAULTS.BFC_CLIP(W, sign)
   return sign or W
 end
 
-function compy.ldraw.BFC_NOCLIP(W)
+function BFC_DEFAULTS.BFC_NOCLIP(W)
   return nil
 end
 
--- No-op meta callbacks. Passes override these on entry.
+-- Indexed placements that are shorthand for place(... i) with
+-- a fixed orthogonal_base index. Same mapping as NAMED_INDEX
+-- in transpiler/types.lua. Each pass installs these in its
+-- own callback table; this constant only fixes the names.
 
-compy.ldraw.LDRAW_ORG = ignore
-compy.ldraw.STEP = ignore
-compy.ldraw.CLEAR = ignore
-compy.ldraw.PAUSE = ignore
-compy.ldraw.SAVE = ignore
-compy.ldraw.WRITE = ignore
-compy.ldraw.PRINT = ignore
-compy.ldraw.CATEGORY = ignore
-compy.ldraw.PREVIEW = ignore
-compy.ldraw.KEYWORD = ignore
-
--- Default geometry no-ops. Pass entries swap these with
--- pass-specific closures.
-
-compy.ldraw.edge = ignore
-compy.ldraw.line = ignore
-compy.ldraw.outline = ignore
-compy.ldraw.color_outline = ignore
-compy.ldraw.tri = ignore
-compy.ldraw.quad = ignore
+INDEXED_PLACEMENTS = {
+  placeS = 5, 
+  placeW = 17, 
+  placeE = 20,
+  mirrorEW = 1, 
+  mirrorUD = 2, 
+  mirrorNS = 4
+}

@@ -1,10 +1,10 @@
 -- Pick pass body. Loaded once at runtime via loadfile and
 -- called repeatedly as a function. Each invocation re-runs
 -- this chunk with fresh (root, ray) and fresh local state.
--- State lives as upvalues of the closures installed in
--- compy.ldraw; no module-level mutable state.
+-- The pass installs its callback table for the duration of
+-- the traversal; no module-level mutable state.
 
-local root, ray = ...
+local root, ray, radii = ...
 
 local ox, oy, oz = ray.origin:c3()
 local dx, dy, dz = ray.dir:c3()
@@ -33,7 +33,7 @@ local function polygon_test(n, W)
   end
 end
 
-local function call_sub(sub, q, M, T, W)
+local function call_sub_any(sub, q, M, T, W)
   if L.parts[sub] then
     local saved = current_part
     current_part = {
@@ -48,84 +48,109 @@ local function call_sub(sub, q, M, T, W)
   end
 end
 
-L.tri = function(M, T, W, q,
+-- Orthonormal placements may skip a subtree whose bounding
+-- sphere the ray misses.
+
+local function call_sub_ortho(sub, q, M, T, W)
+  if radii and radii[sub] then
+    local cx, cy, cz = T:c3()
+    if not sphere_test(ox, oy, oz, dx, dy, dz,
+        cx, cy, cz, radii[sub]) then
+      return
+    end
+  end
+  call_sub_any(sub, q, M, T, W)
+end
+
+local PICK_CALLBACKS = { }
+PICK_CALLBACKS.edge = ignore
+PICK_CALLBACKS.line = ignore
+PICK_CALLBACKS.outline = ignore
+PICK_CALLBACKS.color_outline = ignore
+PICK_CALLBACKS.LDRAW_ORG = ignore
+PICK_CALLBACKS.STEP = ignore
+PICK_CALLBACKS.CLEAR = ignore
+PICK_CALLBACKS.PAUSE = ignore
+PICK_CALLBACKS.SAVE = ignore
+PICK_CALLBACKS.WRITE = ignore
+PICK_CALLBACKS.PRINT = ignore
+PICK_CALLBACKS.CATEGORY = ignore
+PICK_CALLBACKS.PREVIEW = ignore
+PICK_CALLBACKS.KEYWORD = ignore
+
+for k, v in pairs(BFC_DEFAULTS) do
+  PICK_CALLBACKS[k] = v
+end
+
+PICK_CALLBACKS.tri = function(M, T, W, q,
     x1, y1, z1, x2, y2, z2, x3, y3, z3)
   load_globals(M, T, 3,
     x1, y1, z1, x2, y2, z2, x3, y3, z3)
   polygon_test(3, W)
 end
 
-L.quad = function(M, T, W, q,
+PICK_CALLBACKS.quad = function(M, T, W, q,
     x1, y1, z1, x2, y2, z2, x3, y3, z3, x4, y4, z4)
   load_globals(M, T, 4,
     x1, y1, z1, x2, y2, z2, x3, y3, z3, x4, y4, z4)
   polygon_test(4, W)
 end
 
-L.placeN = function(M, T, W, sub, q, x, y, z)
+PICK_CALLBACKS.placeN = function(M, T, W, sub, q, x, y, z)
   if sub then
-    call_sub(sub, q, M, L.step_t(M, T, x, y, z), W)
+    call_sub_ortho(sub, q, M, L.step_t(M, T, x, y, z), W)
   end
 end
 
-L.place = function(M, T, W, sub, q, x, y, z, i)
+PICK_CALLBACKS.place = function(M, T, W, sub, q, x, y, z, i)
   if sub then
-    call_sub(sub, q, M:orthogonal3(i),
+    call_sub_ortho(sub, q, M:orthogonal3(i),
       L.step_t(M, T, x, y, z), W)
   end
 end
 
-L.placeS = function(M, T, W, sub, q, x, y, z)
-  L.place(M, T, W, sub, q, x, y, z, 5)
+-- Build a pick placement closure that calls PICK_CALLBACKS.place with a
+-- fixed orthogonal_base index. Used to materialise placeS/W/E
+-- and mirrorEW/UD/NS from INDEXED_PLACEMENTS.
+
+local function make_pick_indexed(i)
+  return function(M, T, W, sub, q, x, y, z)
+    PICK_CALLBACKS.place(M, T, W, sub, q, x, y, z, i)
+  end
 end
 
-L.placeW = function(M, T, W, sub, q, x, y, z)
-  L.place(M, T, W, sub, q, x, y, z, 17)
+for name, i in pairs(INDEXED_PLACEMENTS) do
+  PICK_CALLBACKS[name] = make_pick_indexed(i)
 end
 
-L.placeE = function(M, T, W, sub, q, x, y, z)
-  L.place(M, T, W, sub, q, x, y, z, 20)
-end
+-- Non-orthonormal placements skip the sphere test entirely;
+-- the bounding radius is in part-local coordinates and would
+-- need to be scaled by the largest eigenvalue of the transform
+-- to remain valid. TODO: extend skip support to these.
 
-L.mirrorEW = function(M, T, W, sub, q, x, y, z)
-  L.place(M, T, W, sub, q, x, y, z, 1)
-end
-
-L.mirrorUD = function(M, T, W, sub, q, x, y, z)
-  L.place(M, T, W, sub, q, x, y, z, 2)
-end
-
-L.mirrorNS = function(M, T, W, sub, q, x, y, z)
-  L.place(M, T, W, sub, q, x, y, z, 4)
-end
-
-L.stretch = function(M, T, W, sub, q, x, y, z, a, e, i)
+PICK_CALLBACKS.stretch = function(M, T, W, sub, q, x, y, z, a, e, i)
   if sub then
-    call_sub(sub, q, Mat.diag(a, e, i):mul(M),
+    call_sub_any(sub, q, Mat.diag(a, e, i):mul(M),
       L.step_t(M, T, x, y, z), W)
   end
 end
 
-L.twist = function(M, T, W, sub, q, x, y, z, a, c)
+PICK_CALLBACKS.twist = function(M, T, W, sub, q, x, y, z, a, c)
   if sub then
-    call_sub(sub, q, L.twist_m(a, c):mul(M),
+    call_sub_any(sub, q, L.twist_m(a, c):mul(M),
       L.step_t(M, T, x, y, z), W)
   end
 end
 
-L.ref = function(M, T, W, sub, q, x, y, z,
+PICK_CALLBACKS.ref = function(M, T, W, sub, q, x, y, z,
     a, b, c, d, e, f, g, h, i)
   if sub then
-    call_sub(sub, q,
+    call_sub_any(sub, q,
       L.ref_m(a, b, c, d, e, f, g, h, i):mul(M),
       L.step_t(M, T, x, y, z), W)
   end
 end
 
-L.edge = ignore
-L.line = ignore
-L.outline = ignore
-L.color_outline = ignore
-
+setmetatable(compy.ldraw, { __index = PICK_CALLBACKS })
 root()
 return hit, hit_l
