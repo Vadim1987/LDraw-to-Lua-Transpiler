@@ -50,12 +50,25 @@ local function emit_preview(rest)
   emit_call("PREVIEW", args)
 end
 
--- Emit !KEYWORDS: each whitespace-separated word becomes a
--- separate KEYWORD call on its own line.
+-- Normalise one !KEYWORDS field: collapse all internal
+-- whitespace runs to a single space, then trim ends.
+
+local function normalise_keyword(s)
+  s = s:gsub("%s+", " ")
+  return s:match("^%s*(.-)%s*$")
+end
+
+-- Emit !KEYWORDS: per spec the line is a comma-separated list
+-- of keywords or short phrases. Each phrase becomes one
+-- KEYWORD call; internal whitespace is collapsed to a single
+-- space and leading/trailing spaces are trimmed.
 
 local function emit_keywords(rest)
-  for word in rest:gmatch("%S+") do
-    emit_call("KEYWORD", { string.format("%q", word) })
+  for field in (rest .. ","):gmatch("([^,]*),") do
+    local word = normalise_keyword(field)
+    if word ~= "" then
+      emit_call("KEYWORD", { string.format("%q", word) })
+    end
   end
 end
 
